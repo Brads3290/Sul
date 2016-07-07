@@ -6,11 +6,9 @@
 #include <windows.h>
 #include <stdexcept>
 
-using std::string;
-
 namespace Sul {
     class DynamicLibrary {
-        string DLLPath;
+        std::string DLLPath;
         HINSTANCE hDLL = nullptr;
 
         //static std::vector<DynamicLibrary*> _List;
@@ -19,7 +17,7 @@ namespace Sul {
         DynamicLibrary() {
             //_List.push_back(this);
         }
-        DynamicLibrary(string path): DLLPath(path) {
+        DynamicLibrary(std::string path): DLLPath(path) {
             //_List.push_back(this);
         }
         ~DynamicLibrary() {
@@ -55,7 +53,7 @@ namespace Sul {
             }
         }
 
-        FARPROC getProcAddress(string proc_name) {
+        FARPROC getProcAddress(std::string proc_name) {
             requireDLL("getProcAddress cannot run as the DLL \"" + DLLPath + "\" isn't loaded.");
 
             auto proc = GetProcAddress(hDLL, proc_name.c_str());
@@ -67,10 +65,10 @@ namespace Sul {
             return proc;
         }
 
-        const string &getDLLPath() const {
+        const std::string &getDLLPath() const {
             return DLLPath;
         }
-        void setDLLPath(const string &DLLPath) {
+        void setDLLPath(const std::string &DLLPath) {
             if (isDLLLoaded()) {
                 throw std::runtime_error("Cannot set a new DLL path because the DLL from \"" + DLLPath + "\" is currently loaded in memory");
             }
@@ -84,7 +82,7 @@ namespace Sul {
             return hDLL;
         }
     protected:
-        void requireDLL(string err) {
+        void requireDLL(std::string err) {
             if (!isDLLLoaded()) {
                 throw std::runtime_error(err);
             }

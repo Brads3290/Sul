@@ -19,14 +19,14 @@ namespace Sul {
         class LocalServer;
         class RemoteServer;
 
-        void SetDLLPath(string);
-        string GetDLLPath();
+        void SetDLLPath(std::string);
+        std::string GetDLLPath();
         void SetMessageUIDLength(unsigned int);
         unsigned int GetMessageUIDLength();
 
         class Base {
-            friend void SetDLLPath(string);
-            friend string GetDLLPath();
+            friend void SetDLLPath(std::string);
+            friend std::string GetDLLPath();
 
         protected:
             static DynamicLibrary DLL;
@@ -48,7 +48,7 @@ namespace Sul {
             };
 
             template <class Type>
-            void LoadProc(Type& ptr, string name) {
+            void LoadProc(Type& ptr, std::string name) {
                 ptr = (Type)DLL.getProcAddress(name);
             }
 
@@ -86,10 +86,10 @@ namespace Sul {
         //LocalNode
         const char* (*Base::CallDLL::getNextMessage)(HANDLE) = nullptr; //MailSlot Handle
 
-        void SetDLLPath(string path) {
+        void SetDLLPath(std::string path) {
             Base::DLL.setDLLPath(path);
         }
-        string GetDLLPath() {
+        std::string GetDLLPath() {
             return Base::DLL.getDLLPath();
         }
 
@@ -194,7 +194,7 @@ namespace Sul {
                 return numNewMessages() > 0;
             }
 
-            static bool Exists(string path) {
+            static bool Exists(std::string path) {
                 return CallDLL::mailslotExists(("\\\\.\\mailslot\\" + Prefix + path).c_str());
             }
 
@@ -211,7 +211,7 @@ namespace Sul {
                 _message_map["uid"] = CallDLL::generateUID(UIDLength);
             }
             MessageBase(std::string& message): MessageBase() {
-                std::vector<string> lines;
+                std::vector<std::string> lines;
 
                 //Ensure the first and last character is not an ampersand or whitespace, otherwise the below algorithm will error
                 while (message[0] == '&' || message[0] == ' ' || message[0] == '\t' || message[0] == '\n') {
@@ -222,7 +222,7 @@ namespace Sul {
                 }
 
                 //Separate the string into lines based on the '&' character
-                string line;
+                std::string line;
                 unsigned i = 0, j = 0;
                 bool found = false;
                 for (; j < message.length(); ++j) { //Iterate over the string
@@ -250,7 +250,7 @@ namespace Sul {
                 }
 
                 //Assign to the std::map
-                string key, value;
+                std::string key, value;
                 for (int k = 0; k < lines.size(); ++k) {
                     //split name and value
                     key = lines[k].substr(0, lines[k].find('='));
@@ -310,10 +310,10 @@ namespace Sul {
                 _message_map = msg._message_map;
                 return *this;
             }
-            string& operator[](string& key) {
+            std::string& operator[](std::string& key) {
                 return _message_map[key];
             }
-            string& operator[](string&& key) {
+            std::string& operator[](std::string&& key) {
                 return _message_map[key];
             }
 
@@ -324,7 +324,7 @@ namespace Sul {
 
                 send(get("target"));
             }
-            virtual void send(string dest) {
+            virtual void send(std::string dest) {
                 if (!_node_link) {
                     throw std::runtime_error("Sul::Comms::MessageBase::sendTo - The node link no longer exists.");
                 }
@@ -340,17 +340,17 @@ namespace Sul {
                 msg["target"] = _message_map["sender"];
                 _node_link->send(msg);
             }
-            virtual void reply(string msg) {
+            virtual void reply(std::string msg) {
                 reply(MessageBase(msg));
             }
-            string get(string& key) const {
+            std::string get(std::string& key) const {
                 if (_message_map.find(key) == _message_map.end()) {
                     return "";
                 }
 
                 return _message_map.at(key);
             }
-            string get(string&& key) const {
+            std::string get(std::string&& key) const {
                 if (_message_map.find(key) == _message_map.end()) {
                     return "";
                 }
@@ -360,12 +360,12 @@ namespace Sul {
             std::map<std::string, std::string>& getMessageMap() {
                 return _message_map;
             };
-            std::string getMessageString() {
+            std::string getMessage() {
                 //Explode the map into a string
-                string message = "";
+                std::string message = "";
                 for (auto i = _message_map.begin(), e = _message_map.end(); i != e; i++) {
-                    string first = CallDLL::messageEncode(i->first.c_str());
-                    string second = CallDLL::messageEncode(i->second.c_str());
+                    std::string first = CallDLL::messageEncode(i->first.c_str());
+                    std::string second = CallDLL::messageEncode(i->second.c_str());
                     message += first + "=" + second;
 
                     if (++i != e) {
@@ -390,7 +390,7 @@ namespace Sul {
 
             msg["sender"] = _client_id;
             auto dest = mailslot_prefix + msg["target"];
-            CallDLL::send(msg.getMessageString().c_str(), dest.c_str());
+            CallDLL::send(msg.getMessage().c_str(), dest.c_str());
         }
         NodeBase::~NodeBase() {
             for (int i = 0; i < _msg_links.size(); ++i) {
@@ -605,7 +605,15 @@ namespace Sul {
 
                 void onReply(std::function<void(MessageBase&)> fn) {
                     _server_link->setReceiveEvent(Event([this](MessageBase const& msg) -> bool {
-                        return msg.get("type") == "reply" && msg.get("reply-to") == (*this)["uid"];
+                        //Capture any replies directed at this message, that are NOT errors
+                        return msg.get("type") == "reply" && msg.get("reply-to") == (*this)["uid"] && msg.get("status") != "error";
+                    }), fn);
+                }
+
+                void onError(std::function<void(MessageBase&)> fn) {
+                    _server_link->setReceiveEvent(Event([this](MessageBase const& msg) -> bool {
+                        //Capture any replies directed at this message, that ARE errors
+                        return msg.get("type") == "reply" && msg.get("reply-to") == (*this)["uid"] && msg.get("status") == "error";
                     }), fn);
                 }
 
@@ -616,14 +624,14 @@ namespace Sul {
 
                     send(get("target"));
                 }
-                virtual void send(string dest) override {
+                virtual void send(std::string dest) override {
                     (*this)["target"] = dest;
 
                     _server_link->processOutgoingMessage(*this);
 
                     MessageBase::send(dest);
                 }
-                virtual void reply(string msg) {
+                virtual void reply(std::string msg) {
                     reply(Message(msg, _node_link, _server_link));
                 }
                 virtual void reply(Message msg) {
@@ -632,6 +640,22 @@ namespace Sul {
                     msg["target"] = get("sender");
 
                     msg.send();
+                }
+                virtual void replyError(Message msg) {
+                    msg["status"] = "error";
+                    reply(msg);
+                }
+                virtual void replyError(std::string msg) {
+                    Message resp;
+                    resp.linkWithServer(this->_server_link);
+                    resp.linkWithNode(this->_node_link);
+                    this->_server_link->addLink(&resp);
+                    this->_node_link->addLink(&resp);
+
+                    resp["status"] = "error";
+                    resp["msg"] = msg;
+
+                    reply(resp);
                 }
             };
             friend class Message;
@@ -811,7 +835,7 @@ namespace Sul {
             }
             std::size_t onExternalError(std::function<void(MessageBase&)> fn) {
                 return setReceiveEvent(Event([](MessageBase const& msg) -> bool {
-                    return msg.get("type") == "error";
+                    return msg.get("status") == "error";
                 }), fn);
             }
             std::size_t onForwardRequest(std::function<void(MessageBase&)> fn) {
@@ -997,7 +1021,7 @@ namespace Sul {
                 _listening = false;
             }
 
-            static bool Exists(string path) {
+            static bool Exists(std::string path) {
                 return NodeBase::Exists(path);
             }
 

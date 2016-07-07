@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.4)
-project(Comms)
+project(FileSystem)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "F:\\Coding\\Projects\\Sully\\lib")
 
-add_library(Comms SHARED comms_export.cpp MailSlots.h)
+add_library(FileSystem SHARED filesystem_export.cpp)
