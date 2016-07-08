@@ -301,13 +301,49 @@ namespace Sul {
             out.close();
         }
 
+        class FileBase {
+        protected:
+            virtual std::unique_ptr<char[]> _getRawData() = 0;
+            virtual void _setRawData(std::unique_ptr<char[]>&&) = 0;
+            virtual std::string _getFullPath() = 0;
+            virtual void _setFullPath(std::string) = 0;
+
+        public:
+            template <class TransformTo>
+            TransformTo cast() {
+                TransformTo ret;
+                FileBase* pret = &ret;
+                pret->_setRawData(this->_getRawData());
+                pret->_setFullPath(this->_getFullPath());
+
+                return ret;
+            }
+
+            template <class TransformTo>
+            explicit operator TransformTo() {
+                return cast<TransformTo>();
+            };
+        };
         template <class FileFormat, class StorageType, class AccessType, class ...FormatArgs>
-        class File {
+        class File: public FileBase {
             typedef File<FileFormat, StorageType, AccessType, FormatArgs...> This;
 
         protected:
             Format::FormatBase<StorageType, AccessType>* _file;
             std::string _fullfilepath;
+
+            virtual std::unique_ptr<char[]> _getRawData() {
+                return std::move(_file->rawDataOut());
+            }
+            virtual void _setRawData(std::unique_ptr<char[]>&& data) {
+                _file->rawDataIn(std::move(data));
+            }
+            virtual std::string _getFullPath() {
+                return _fullfilepath;
+            };
+            virtual void _setFullPath(std::string path) {
+                _fullfilepath = path;
+            };
 
         public:
             File(std::string relfilepath, FormatArgs ...args) {
@@ -617,14 +653,14 @@ namespace Sul {
             BinaryFile(BinaryFile const& file): File(file) {}
             BinaryFile(BinaryFile&& file): File(file) {}
 
-            char& operator[](unsigned int i) {
+            virtual char& operator[](unsigned int i) {
                 if (i > _file->segmentCount() - 1) {
                     throw std::runtime_error("BinaryFile[int] - The provided index doesn't exist");
                 }
 
                 return _file->dataRef(i);
             }
-            char get(unsigned int i) const {
+            virtual char get(unsigned int i) const {
                 if (i > _file->segmentCount() - 1) {
                     throw std::runtime_error("BinaryFile[int] - The provided index doesn't exist");
                 }
@@ -632,10 +668,10 @@ namespace Sul {
                 return _file->dataOut(i);
             }
 
-            void push(char line) {
-                _file->dataIn(line);
+            virtual void push_byte(char byte) {
+                _file->dataIn(byte);
             }
-            char pop() {
+            virtual char pop_byte() {
                 char ret = _file->dataOut(_file->segmentCount() - 1);
                 _file->clear(_file->segmentCount() - 1);
                 return ret;
@@ -650,27 +686,27 @@ namespace Sul {
             TextFile(TextFile const& file): File(file) {}
             TextFile(TextFile&& file): File(file) {}
 
-            std::string& operator[](unsigned int index) {
+            virtual std::string& operator[](unsigned int index) {
                 if (index > lines() - 1) {
                     throw std::runtime_error("TextFile[int] - The provided index doesn't exist");
                 }
 
                 return _file->dataRef(index);
             }
-            std::string get(unsigned int index) const {
+            virtual  std::string get(unsigned int index) const {
                 if (index > lines() - 1) {
                     throw std::runtime_error("TextFile[int] - The provided index doesn't exist");
                 }
 
                 return _file->dataOut(index);
             }
-            unsigned int lines() const {
+            virtual unsigned int lines() const {
                 return _file->segmentCount();
             }
-            void push(std::string line) {
+            virtual void push_line(std::string line) {
                 _file->dataIn(line);
             }
-            std::string pop() {
+            virtual std::string pop_line() {
                 if (_file->segmentCount() == 0) {
                     throw std::runtime_error("TextFile::pop - No more data to pop");
                 }
@@ -680,16 +716,16 @@ namespace Sul {
                 return ret;
             }
         };
-        class DLLFile: public File<Format::Binary, char, unsigned int> {
+        class DLLFile: public BinaryFile {
             HMODULE hDLL = nullptr;
 
         public:
-            DLLFile(): File("") {}
-            DLLFile(std::string path): File(path) {}
-            DLLFile(File<Format::Binary, char, unsigned int>& file): File(file) {}
-            DLLFile(File<Format::Binary, char, unsigned int>&& file): File(file) {}
-            DLLFile(DLLFile const& file): File(file) {}
-            DLLFile(DLLFile&& file): File(file) {}
+            DLLFile(): BinaryFile("") {}
+            DLLFile(std::string path): BinaryFile(path) {}
+            DLLFile(File<Format::Binary, char, unsigned int>& file): BinaryFile(file) {}
+            DLLFile(File<Format::Binary, char, unsigned int>&& file): BinaryFile(file) {}
+            DLLFile(DLLFile const& file): BinaryFile(file) {}
+            DLLFile(DLLFile&& file): BinaryFile(file) {}
 
             template <class Ret, class ...Args>
             std::function<Ret(Args...)> getProc(std::string name) {
@@ -733,6 +769,87 @@ namespace Sul {
             }
             bool HandleIsLoaded() {
                 return (bool) hDLL;
+            }
+        };
+        class ConfigFile: public TextFile {
+            std::map<std::string, std::string> _map;
+            std::string _commentDelim = "#";
+            std::string _assignDelim = "=";
+
+        public:
+            ConfigFile(): TextFile("", 13) {}
+            ConfigFile(std::string path, char delim = 13): TextFile(path, delim) {}
+            ConfigFile(File<Format::Text, std::string, unsigned int, char>& file): TextFile(file) {}
+            ConfigFile(File<Format::Text, std::string, unsigned int, char>&& file): TextFile(file) {}
+            ConfigFile(ConfigFile const& file): TextFile(file) {}
+            ConfigFile(ConfigFile&& file): TextFile(file) {}
+
+            virtual void open() override {
+                TextFile::open();
+
+                //Add some extra functionality to parse the config file
+                for (unsigned int i = 0; i < this->lines(); ++i) {
+                    std::string line = TextFile::get(i);
+
+                    if (line.find(_commentDelim) == 0) {
+                        continue; //A comment line
+                    } else {
+                        _map[line.substr(0, line.find(_assignDelim) + 1)] = line.substr(line.find(_assignDelim) + 1);
+                    }
+                }
+            }
+            virtual void save() override {
+                //Add extra functionality to write the config back to the file
+                for (unsigned int i = 0; i < this->lines(); ++i) {
+                    std::string line = TextFile::get(i);
+
+                    if (line.find(_commentDelim) == 0) {
+                        continue; //A comment line
+                    } else {
+                        std::string key = line.substr(0, line.find(_assignDelim) + 1);
+                        std::string val = line.substr(line.find(_assignDelim) + 1);
+
+                        if (_map.find(key) != _map.end()) {
+                            TextFile::operator[](i) = key + _assignDelim + val;
+                            _map.erase(key);
+                        }
+                    }
+                }
+                for (auto j = _map.begin(); j != _map.end(); ++j) {
+                    TextFile::push_line(j->first + _assignDelim + j->second);
+                }
+
+                TextFile::save();
+            }
+            virtual std::string& operator[](std::string key) {
+                if (key.length() == 0) {
+                    throw std::runtime_error("ConfigFile[] - The provided key was empty");
+                }
+
+                return _map[key];
+            }
+            virtual std::string const& get(std::string key) {
+                if (key.length() == 0) {
+                    throw std::runtime_error("ConfigFile::get() - The provided key was empty");
+                }
+
+                return _map[key];
+            }
+
+            const std::string &getCommentDelimeter() const {
+                return _commentDelim;
+            }
+
+            void setCommentDelimeter(const std::string &_commentDelim) {
+                ConfigFile::_commentDelim = _commentDelim;
+            }
+
+            const std::string &getAssignmentDelimeter() const {
+                return _assignDelim;
+            }
+
+            void setAssignmentDelimeter(const std::string &_assignDelim) {
+                ConfigFile::_assignDelim = _assignDelim;
             }
         };
     }
