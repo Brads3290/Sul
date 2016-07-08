@@ -16,6 +16,8 @@
 
 namespace Sul {
     namespace FileSystem {
+        class BinaryFile;
+
         namespace Transformation {
             class TransformationBase {
             public:
@@ -112,6 +114,8 @@ namespace Sul {
                     return _lines.size();
                 }
             };
+
+            //Binary: Stored as bytes (chars) and accessed as a byte number.
             class Binary: public FormatBase<char, unsigned int> {
                 std::vector<char> _data;
 
@@ -235,12 +239,21 @@ namespace Sul {
 
             return path;
         }
-        bool Exists(std::string path) {
+        bool FileExists(std::string path) {
             std::ifstream in(path);
             bool ret = (bool) in;
             in.close();
 
             return ret;
+        }
+        bool DirExists(std::string path) {
+            DWORD ftyp = GetFileAttributesA(path.c_str());
+            if (ftyp == INVALID_FILE_ATTRIBUTES) {
+                return false;
+            }
+
+            return (ftyp & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
         }
         std::string GetFileDirectoryRel(std::string fullpath) {
             //Get the current directory
@@ -292,7 +305,7 @@ namespace Sul {
             return path + name;
         }
         void Create(std::string reltarget) {
-            if (Exists(reltarget)) {
+            if (FileExists(reltarget)) {
                 throw std::runtime_error("File::Create - The file already exists");
             }
 
@@ -323,6 +336,148 @@ namespace Sul {
             explicit operator TransformTo() {
                 return cast<TransformTo>();
             };
+        };
+        class Directory {
+            std::string _fulldirpath;
+            std::vector<std::string> _child_files;
+            std::vector<std::string> _child_dirs;
+
+        public:
+            Directory() {}
+            Directory(std::string path) {
+                if (path.length() > 0) {
+                    target(path);
+
+                    if (exists()) {
+                        load();
+                    }
+                }
+            }
+
+            virtual void target(std::string relfilepath) {
+                //Get the full file path
+                _fulldirpath = GetFullPath(relfilepath);
+            }
+            virtual void load() {
+                //Find all children
+                HANDLE dir;
+                WIN32_FIND_DATA file_data;
+                if ((dir = FindFirstFile((getFullPath() + "/*").c_str(), &file_data)) != INVALID_HANDLE_VALUE) {
+                    do {
+                        const std::string file_name = file_data.cFileName;
+                        const bool is_directory = (file_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
+                        if (is_directory) {
+                            if (file_name == "." || file_name == "..") {
+                                continue;
+                            }
+
+                            _child_dirs.push_back(file_name);
+                        } else {
+                            _child_files.push_back(file_name);
+                        }
+                    } while (FindNextFile(dir, &file_data));
+
+                    FindClose(dir);
+                }
+
+
+            }
+            virtual void load(std::string path) {
+                target(path);
+                load();
+            }
+            virtual void create() {
+                BOOL res = CreateDirectory(_fulldirpath.c_str(), NULL);
+
+                if (!res) {
+                    throw std::runtime_error("Directory::create - CreateDirectory failed with " + std::to_string(GetLastError()));
+                }
+            }
+            virtual void create(std::string path) {
+                target(path);
+                create();
+            }
+            virtual void terminate() {
+                BOOL res = RemoveDirectoryA(_fulldirpath.c_str());
+
+                if (!res) {
+                    throw std::runtime_error("Directory::terminate - Error deleting file. Error " + std::to_string(errno));
+                }
+            }
+            virtual void name(std::string name) {
+                int res = rename(_fulldirpath.c_str(), name.c_str());
+
+                if (res != 0) {
+                    throw std::runtime_error("Directory::name - Error deleting file. Error " + std::to_string(errno));
+                }
+            }
+            virtual void move(std::string newpath) {
+                if (newpath[newpath.length() - 1] != '/' || newpath[newpath.length() - 1] != '\\') {
+                    newpath += '/';
+                }
+
+                newpath += getDirectoryName();
+
+                if (FileExists(newpath)) {
+                    throw std::runtime_error("Directory::move - the destination already exists");
+                }
+
+                BOOL res = MoveFile(_fulldirpath.c_str(), newpath.c_str());
+
+                if (!res) {
+                    throw std::runtime_error("Directory::move - MoveFile failed with error " + std::to_string(GetLastError()));
+                }
+
+                target(_fulldirpath);
+            }
+            virtual unsigned int countChildren() {
+                return _child_files.size() + _child_dirs.size();
+            }
+            virtual unsigned int countChildDirs() {
+                return _child_dirs.size();
+            }
+            virtual unsigned int countChildFiles() {
+                return _child_files.size();
+            }
+            virtual BinaryFile getChildFile(unsigned int);
+            virtual Directory getChildDir(unsigned int i) {
+                return Directory(_child_dirs[i]);
+            }
+
+            virtual std::string getFullPath() {
+                if (_fulldirpath.length() == 0) {
+                    throw std::runtime_error("File::getFullPath - File path is null");
+                }
+
+                return _fulldirpath;
+            }
+            virtual std::string getDirectoryName() {
+                if (_fulldirpath.length() == 0) {
+                    throw std::runtime_error("File::getFileName - File path is null");
+                }
+                std::string name, path;
+                GetFullPathAndName(_fulldirpath, name, path);
+                return name;
+            }
+            virtual std::string getPathAbs() {
+                if (_fulldirpath.length() == 0) {
+                    throw std::runtime_error("File::getFileDirectoryAbs - File path is null");
+                }
+                std::string name, path;
+                GetFullPathAndName(_fulldirpath, name, path);
+                return path;
+            }
+            virtual std::string getPathRel() {
+                if (_fulldirpath.length() == 0) {
+                    throw std::runtime_error("File::getFileDirectoryRel - File path is null");
+                }
+
+                return GetFileDirectoryRel(getPathAbs());
+            }
+            virtual bool exists() {
+                return DirExists(_fulldirpath);
+            }
         };
         template <class FileFormat, class StorageType, class AccessType, class ...FormatArgs>
         class File: public FileBase {
@@ -499,7 +654,7 @@ namespace Sul {
 
                 newpath += getFileName();
 
-                if (Exists(newpath)) {
+                if (FileExists(newpath)) {
                     throw std::runtime_error("File::move - the destination already exists");
                 }
 
@@ -518,7 +673,7 @@ namespace Sul {
 
                 newpath += getFileName();
 
-                if (Exists(newpath)) {
+                if (FileExists(newpath)) {
                     throw std::runtime_error("File::copy - the destination already exists");
                 }
 
@@ -533,7 +688,7 @@ namespace Sul {
                     throw std::runtime_error("File::exists - File path is null");
                 }
 
-                return Exists(_fullfilepath);
+                return FileExists(_fullfilepath);
             }
             virtual unsigned int size() {
                 return _file->size();
@@ -628,6 +783,10 @@ namespace Sul {
                 GetFullPathAndName(_fullfilepath, name, path);
                 return name;
             }
+            virtual std::string getFileExtension() {
+                std::string name = getFileName();
+                return name.substr(name.find_last_of('.') + 1);
+            }
             virtual std::string getFileDirectoryAbs() {
                 if (_fullfilepath.length() == 0) {
                     throw std::runtime_error("File::getFileDirectoryAbs - File path is null");
@@ -641,7 +800,7 @@ namespace Sul {
                     throw std::runtime_error("File::getFileDirectoryRel - File path is null");
                 }
 
-                return GetFileDirectoryRel(_fullfilepath);
+                return GetFileDirectoryRel(getFileDirectoryAbs());
             }
         };
         class BinaryFile: public File<Format::Binary, char, unsigned int> {
@@ -852,6 +1011,10 @@ namespace Sul {
                 ConfigFile::_assignDelim = _assignDelim;
             }
         };
+
+        BinaryFile Directory::getChildFile(unsigned int i) {
+            return BinaryFile(_child_files[i]);
+        }
     }
 }
 #endif //PROJECT_FILING_H
