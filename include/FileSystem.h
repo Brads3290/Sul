@@ -10,6 +10,7 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <tuple>
 #include "Shlwapi.h"
 #include "Sul.h"
 
@@ -38,7 +39,7 @@ namespace Sul {
                 virtual void dataIn(StorageType) = 0;
                 virtual StorageType dataOut(AccessType) const = 0;
                 virtual StorageType& dataRef(AccessType) = 0;
-                virtual std::unique_ptr<char[]>&& rawDataOut() = 0;
+                virtual std::unique_ptr<char[]> rawDataOut() = 0;
                 virtual void rawDataIn(std::unique_ptr<char[]>&&) = 0;
                 virtual void clearAll() = 0;
                 virtual void clear(AccessType) = 0;
@@ -53,7 +54,7 @@ namespace Sul {
             public:
                 char _delim;
 
-                Text(char delim = 13) {
+                Text(char delim = '\n') {
                     _delim = delim;
                 }
 
@@ -66,10 +67,14 @@ namespace Sul {
                 virtual std::string& dataRef(unsigned int lineNum) {
                     return _lines[lineNum];
                 }
-                virtual std::unique_ptr<char[]>&& rawDataOut() {
+                virtual std::unique_ptr<char[]> rawDataOut() {
                     std::string buf;
                     for (int i = 0; i < _lines.size(); ++i) {
                         buf += _lines[i];
+
+                        if (i < _lines.size() - 1) {
+                            buf += _delim;
+                        }
                     }
 
                     char* ret = new char[buf.length() + 1];
@@ -95,12 +100,64 @@ namespace Sul {
                     unsigned long int count = 0;
                     for (int i = 0; i < _lines.size(); ++i) {
                         count += _lines[i].length() * sizeof(char);
+
+                        if (i < _lines.size() - 1) {
+                            count += sizeof(char); //Add the delimiter
+                        }
                     }
 
                     return count;
                 }
                 virtual unsigned int segmentCount() {
                     return _lines.size();
+                }
+            };
+            class Binary: public FormatBase<char, unsigned int> {
+                std::vector<char> _data;
+
+            public:
+                virtual void dataIn(char data) {
+                    _data.push_back(data);
+                }
+                virtual char dataOut(unsigned int index) const {
+                    return _data[index];
+                }
+                virtual char& dataRef(unsigned int index) {
+                    return _data[index];
+                }
+                virtual std::unique_ptr<char[]> rawDataOut() {
+                    std::string buf;
+                    for (int i = 0; i < _data.size(); ++i) {
+                        buf += _data[i];
+                    }
+
+                    char* ret = new char[buf.length() + 1];
+                    for (int j = 0; j < buf.length(); ++j) {
+                        ret[j] = (char) buf[j];
+                    }
+                    ret[buf.length()] = 0;
+
+                    return std::move(std::unique_ptr<char[]>(ret));
+                }
+                virtual void rawDataIn(std::unique_ptr<char[]>&& data) {
+                    std::string buf = data.get();
+                    for (int i = 0; i < buf.length(); ++i) {
+                        _data.push_back(buf[i]);
+                    }
+                }
+                virtual void clearAll() {
+                    for (int i = 0; i < _data.size(); ++i) {
+                        _data.erase(_data.begin());
+                    }
+                }
+                virtual void clear(unsigned int i) {
+                    _data.erase(_data.begin() + i);
+                }
+                virtual unsigned int size() {
+                    return _data.size();
+                }
+                virtual unsigned int segmentCount() {
+                    return _data.size();
                 }
             };
         }
@@ -246,22 +303,77 @@ namespace Sul {
 
         template <class FileFormat, class StorageType, class AccessType, class ...FormatArgs>
         class File {
+            typedef File<FileFormat, StorageType, AccessType, FormatArgs...> This;
+
         protected:
             Format::FormatBase<StorageType, AccessType>* _file;
             std::string _fullfilepath;
 
         public:
-            File(FormatArgs... args) {
+            File(std::string relfilepath, FormatArgs ...args) {
                 _file = new FileFormat(args...);
-            }
-            File(std::string relfilepath, FormatArgs ...args): File(args...) {
-                target(relfilepath);
-                if (exists()) {
-                    open();
+
+                if (relfilepath.length() > 0) {
+                    target(relfilepath);
+                    if (exists()) {
+                        open();
+                    }
                 }
             }
+            File(This const& file) {
+                _fullfilepath = file._fullfilepath;
+                _file = new FileFormat(*((FileFormat*)file._file));
+            }
+            File(This&& file) {
+                _file = file._file;
+                file._file = nullptr;
+            }
             virtual ~File() {
-                delete _file;
+                if (_file) {
+                    delete _file;
+                }
+            }
+
+            This operator+(StorageType& data) {
+                This ret(*this);
+                ret._file->dataIn(data);
+                return ret;
+            }
+            This operator+(This& file) {
+                This ret(*this);
+                ret._fullfilepath = ""; //When there are two files, the programmer must choose where to save it
+                ret._file->rawDataIn(file._file->rawDataOut());
+                return ret;
+            }
+            This& operator+=(StorageType data) {
+                _file->dataIn(data);
+                return *this;
+            }
+            This& operator+=(This& file) {
+                _file->rawDataIn(file._file->rawDataOut());
+                return *this;
+            }
+            bool operator==(This& file) {
+                //If they are different lengths, return false
+                if (_file->size() != file._file->size()) {
+                    return false;
+                }
+
+                auto one = _file->rawDataOut();
+                auto two = file._file->rawDataOut();
+
+                for (int i = 0; i < _file->size(); ++i) {
+                    if (one[i] != two[i]) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            This& operator=(This& file) {
+                _file->clearAll();
+                _file->rawDataIn(file._file->rawDataOut());
+                return *this;
             }
 
             virtual void target(std::string relfilepath) {
@@ -281,7 +393,7 @@ namespace Sul {
                 std::string buf;
                 std::string line;
                 bool first = true;
-                while (std::getline(in, line)) {
+                while (std::getline(in, line, '\n')) {
                     if (first) {
                         first = false;
                         buf += line;
@@ -321,7 +433,11 @@ namespace Sul {
             virtual void save() {
                 save(_fullfilepath);
             }
-            virtual void save(std::string name) {
+            virtual void save(std::string name) {\
+                if (name.length() == 0) {
+                    throw std::runtime_error("File::save - No file was specified as the target");
+                }
+
                 std::ofstream out(name);
                 out << _file->rawDataOut().get();
                 out.close();
@@ -492,18 +608,131 @@ namespace Sul {
                 return GetFileDirectoryRel(_fullfilepath);
             }
         };
+        class BinaryFile: public File<Format::Binary, char, unsigned int> {
+        public:
+            BinaryFile(): File("") {}
+            BinaryFile(std::string path): File(path) {}
+            BinaryFile(File<Format::Binary, char, unsigned int>& file): File(file) {}
+            BinaryFile(File<Format::Binary, char, unsigned int>&& file): File(file) {}
+            BinaryFile(BinaryFile const& file): File(file) {}
+            BinaryFile(BinaryFile&& file): File(file) {}
+
+            char& operator[](unsigned int i) {
+                if (i > _file->segmentCount() - 1) {
+                    throw std::runtime_error("BinaryFile[int] - The provided index doesn't exist");
+                }
+
+                return _file->dataRef(i);
+            }
+            char get(unsigned int i) const {
+                if (i > _file->segmentCount() - 1) {
+                    throw std::runtime_error("BinaryFile[int] - The provided index doesn't exist");
+                }
+
+                return _file->dataOut(i);
+            }
+
+            void push(char line) {
+                _file->dataIn(line);
+            }
+            char pop() {
+                char ret = _file->dataOut(_file->segmentCount() - 1);
+                _file->clear(_file->segmentCount() - 1);
+                return ret;
+            }
+        };
         class TextFile: public File<Format::Text, std::string, unsigned int, char> {
         public:
+            TextFile(): File("", 13) {}
             TextFile(std::string path, char delim = 13): File(path, delim) {}
+            TextFile(File<Format::Text, std::string, unsigned int, char>& file): File(file) {}
+            TextFile(File<Format::Text, std::string, unsigned int, char>&& file): File(file) {}
+            TextFile(TextFile const& file): File(file) {}
+            TextFile(TextFile&& file): File(file) {}
 
             std::string& operator[](unsigned int index) {
+                if (index > lines() - 1) {
+                    throw std::runtime_error("TextFile[int] - The provided index doesn't exist");
+                }
+
                 return _file->dataRef(index);
             }
             std::string get(unsigned int index) const {
+                if (index > lines() - 1) {
+                    throw std::runtime_error("TextFile[int] - The provided index doesn't exist");
+                }
+
                 return _file->dataOut(index);
             }
-            unsigned int lines() {
+            unsigned int lines() const {
                 return _file->segmentCount();
+            }
+            void push(std::string line) {
+                _file->dataIn(line);
+            }
+            std::string pop() {
+                if (_file->segmentCount() == 0) {
+                    throw std::runtime_error("TextFile::pop - No more data to pop");
+                }
+
+                std::string ret = _file->dataOut(_file->segmentCount() - 1);
+                _file->clear(_file->segmentCount() - 1);
+                return ret;
+            }
+        };
+        class DLLFile: public File<Format::Binary, char, unsigned int> {
+            HMODULE hDLL = nullptr;
+
+        public:
+            DLLFile(): File("") {}
+            DLLFile(std::string path): File(path) {}
+            DLLFile(File<Format::Binary, char, unsigned int>& file): File(file) {}
+            DLLFile(File<Format::Binary, char, unsigned int>&& file): File(file) {}
+            DLLFile(DLLFile const& file): File(file) {}
+            DLLFile(DLLFile&& file): File(file) {}
+
+            template <class Ret, class ...Args>
+            std::function<Ret(Args...)> getProc(std::string name) {
+                if (!hDLL) {
+                    throw std::runtime_error("DLLFile::getProc - The DLL file must be loaded before trying to access procedures within it.");
+                }
+
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "CannotResolve"
+                typedef Ret(*fn_type)(Args...);
+#pragma clang diagnostic pop
+
+                FARPROC ret = GetProcAddress(hDLL, name.c_str());
+
+                if (!ret) {
+                    throw std::runtime_error("DLLFile::getProc - GetProcAddress failed with error " + std::to_string(GetLastError()));
+                }
+
+                return (fn_type) ret;
+            };
+
+            void loadLibrary() {
+                hDLL = LoadLibrary((getFileDirectoryAbs() + getFileName()).c_str());
+
+                if (!hDLL) {
+                    throw std::runtime_error("DLLFile::loadLibrary - Windows API function failed with error code " + std::to_string(GetLastError()));
+                }
+            }
+            void freeLibrary() {
+                if (hDLL) {
+                    FreeLibrary(hDLL);
+                    hDLL = nullptr;
+                }
+            }
+            HMODULE getHandle() {
+                if (hDLL) {
+                    return hDLL;
+                }
+
+                throw std::runtime_error("DLLFile::getHandle - Handle has not been created.");
+            }
+            bool HandleIsLoaded() {
+                return (bool) hDLL;
             }
         };
     }
