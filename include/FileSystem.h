@@ -355,6 +355,11 @@ namespace Sul {
             }
 
             virtual void target(std::string relfilepath) {
+                char last = relfilepath[relfilepath.length() - 1];
+                if (last == '\\' || last == '/') {
+                    relfilepath.pop_back();
+                }
+
                 //Get the full file path
                 _fulldirpath = GetFullPath(relfilepath);
             }
@@ -480,8 +485,8 @@ namespace Sul {
             }
         };
         template <class FileFormat, class StorageType, class AccessType, class ...FormatArgs>
-        class File: public FileBase {
-            typedef File<FileFormat, StorageType, AccessType, FormatArgs...> This;
+        class FileType: public FileBase {
+            typedef FileType<FileFormat, StorageType, AccessType, FormatArgs...> This;
 
         protected:
             Format::FormatBase<StorageType, AccessType>* _file;
@@ -501,7 +506,7 @@ namespace Sul {
             };
 
         public:
-            File(std::string relfilepath, FormatArgs ...args) {
+            FileType(std::string relfilepath, FormatArgs ...args) {
                 _file = new FileFormat(args...);
 
                 if (relfilepath.length() > 0) {
@@ -511,15 +516,15 @@ namespace Sul {
                     }
                 }
             }
-            File(This const& file) {
+            FileType(This const& file) {
                 _fullfilepath = file._fullfilepath;
                 _file = new FileFormat(*((FileFormat*)file._file));
             }
-            File(This&& file) {
+            FileType(This&& file) {
                 _file = file._file;
                 file._file = nullptr;
             }
-            virtual ~File() {
+            virtual ~FileType() {
                 if (_file) {
                     delete _file;
                 }
@@ -802,15 +807,19 @@ namespace Sul {
 
                 return GetFileDirectoryRel(getFileDirectoryAbs());
             }
+
+            virtual Directory getParentDirectory() {
+                return Directory(getFileDirectoryAbs());
+            }
         };
-        class BinaryFile: public File<Format::Binary, char, unsigned int> {
+        class BinaryFile: public FileType<Format::Binary, char, unsigned int> {
         public:
-            BinaryFile(): File("") {}
-            BinaryFile(std::string path): File(path) {}
-            BinaryFile(File<Format::Binary, char, unsigned int>& file): File(file) {}
-            BinaryFile(File<Format::Binary, char, unsigned int>&& file): File(file) {}
-            BinaryFile(BinaryFile const& file): File(file) {}
-            BinaryFile(BinaryFile&& file): File(file) {}
+            BinaryFile(): FileType("") {}
+            BinaryFile(std::string path): FileType(path) {}
+            BinaryFile(FileType<Format::Binary, char, unsigned int>& file): FileType(file) {}
+            BinaryFile(FileType<Format::Binary, char, unsigned int>&& file): FileType(file) {}
+            BinaryFile(BinaryFile const& file): FileType(file) {}
+            BinaryFile(BinaryFile&& file): FileType(file) {}
 
             virtual char& operator[](unsigned int i) {
                 if (i > _file->segmentCount() - 1) {
@@ -836,14 +845,23 @@ namespace Sul {
                 return ret;
             }
         };
-        class TextFile: public File<Format::Text, std::string, unsigned int, char> {
+        class File: public BinaryFile {
         public:
-            TextFile(): File("", 13) {}
-            TextFile(std::string path, char delim = 13): File(path, delim) {}
-            TextFile(File<Format::Text, std::string, unsigned int, char>& file): File(file) {}
-            TextFile(File<Format::Text, std::string, unsigned int, char>&& file): File(file) {}
-            TextFile(TextFile const& file): File(file) {}
-            TextFile(TextFile&& file): File(file) {}
+            File(): BinaryFile("") {}
+            File(std::string path): BinaryFile(path) {}
+            File(FileType<Format::Binary, char, unsigned int>& file): BinaryFile(file) {}
+            File(FileType<Format::Binary, char, unsigned int>&& file): BinaryFile(file) {}
+            File(File const& file): BinaryFile(file) {}
+            File(File&& file): BinaryFile(file) {}
+        };
+        class TextFile: public FileType<Format::Text, std::string, unsigned int, char> {
+        public:
+            TextFile(): FileType("", 13) {}
+            TextFile(std::string path, char delim = 13): FileType(path, delim) {}
+            TextFile(FileType<Format::Text, std::string, unsigned int, char>& file): FileType(file) {}
+            TextFile(FileType<Format::Text, std::string, unsigned int, char>&& file): FileType(file) {}
+            TextFile(TextFile const& file): FileType(file) {}
+            TextFile(TextFile&& file): FileType(file) {}
 
             virtual std::string& operator[](unsigned int index) {
                 if (index > lines() - 1) {
@@ -881,8 +899,8 @@ namespace Sul {
         public:
             DLLFile(): BinaryFile("") {}
             DLLFile(std::string path): BinaryFile(path) {}
-            DLLFile(File<Format::Binary, char, unsigned int>& file): BinaryFile(file) {}
-            DLLFile(File<Format::Binary, char, unsigned int>&& file): BinaryFile(file) {}
+            DLLFile(FileType<Format::Binary, char, unsigned int>& file): BinaryFile(file) {}
+            DLLFile(FileType<Format::Binary, char, unsigned int>&& file): BinaryFile(file) {}
             DLLFile(DLLFile const& file): BinaryFile(file) {}
             DLLFile(DLLFile&& file): BinaryFile(file) {}
 
@@ -938,8 +956,8 @@ namespace Sul {
         public:
             ConfigFile(): TextFile("", 13) {}
             ConfigFile(std::string path, char delim = 13): TextFile(path, delim) {}
-            ConfigFile(File<Format::Text, std::string, unsigned int, char>& file): TextFile(file) {}
-            ConfigFile(File<Format::Text, std::string, unsigned int, char>&& file): TextFile(file) {}
+            ConfigFile(FileType<Format::Text, std::string, unsigned int, char>& file): TextFile(file) {}
+            ConfigFile(FileType<Format::Text, std::string, unsigned int, char>&& file): TextFile(file) {}
             ConfigFile(ConfigFile const& file): TextFile(file) {}
             ConfigFile(ConfigFile&& file): TextFile(file) {}
 
