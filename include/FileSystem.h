@@ -10,7 +10,8 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
-#include <tuple>
+#include <ctime>
+#include <chrono>
 #include "Shlwapi.h"
 #include "Sul.h"
 
@@ -88,6 +89,11 @@ namespace Sul {
                     return std::move(std::unique_ptr<char[]>(ret));
                 }
                 virtual void rawDataIn(std::unique_ptr<char[]>&& data) {
+                    std::string strData(data.get());
+                    if (strData.length() == 0) {
+                        return;
+                    }
+
                     _lines.push_back(data.get());
                 }
                 virtual void clearAll() {
@@ -309,9 +315,12 @@ namespace Sul {
                 throw std::runtime_error("File::Create - The file already exists");
             }
 
-            std::ofstream out(reltarget);
-            out << "";
-            out.close();
+            HANDLE f = CreateFile(reltarget.c_str(), GENERIC_ALL, FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE, 0, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
+            if (!f) {
+                throw std::runtime_error("FileSystem::Create - CreateFile failed with erorr " + std::to_string(GetLastError()));
+            } else {
+                CloseHandle(f);
+            }
         }
 
         class FileBase {
@@ -628,6 +637,9 @@ namespace Sul {
             }
             virtual void save() {
                 save(_fullfilepath);
+            }
+            virtual void clear() {
+                _file->clearAll();
             }
             virtual void save(std::string name) {\
                 if (name.length() == 0) {
@@ -1029,6 +1041,69 @@ namespace Sul {
                 ConfigFile::_assignDelim = _assignDelim;
             }
         };
+        class LogFile: public TextFile {
+            int _mday;
+            std::string _filename;
+
+        public:
+            LogFile(): TextFile("", 13) {}
+            LogFile(std::string path, char delim = 13): TextFile("", delim) {
+                target(path);
+                if (exists()) {
+                    open();
+                }
+            }
+            LogFile(FileType<Format::Text, std::string, unsigned int, char>& file): TextFile(file) {}
+            LogFile(FileType<Format::Text, std::string, unsigned int, char>&& file): TextFile(file) {}
+            LogFile(LogFile const& file): TextFile(file) {}
+            LogFile(LogFile&& file): TextFile(file) {}
+
+            virtual void target(std::string name) override {
+                std::time_t today = time(0);
+                tm* now = localtime(&today);
+                _mday = now->tm_mday;
+
+                std::string timestr;
+                timestr += std::to_string(now->tm_year + 1900) + "_";
+                timestr += std::to_string(now->tm_mon + 1) + "_";
+                timestr += std::to_string(now->tm_mday) + "_";
+
+                _filename = name;
+
+                TextFile::target(timestr + name);
+            }
+            virtual void log(std::string message) {
+                if (_filename.length() == 0) {
+                    throw std::runtime_error("LogFile::log - cannot log to file as no file is specified");
+                }
+
+                std::time_t now = time(0);
+                auto p = localtime(&now);
+
+                if (p->tm_mday != _mday) { //Different day to the file currently being used. Add new file.
+                    target(_filename); //Will add today's datestamp to the file
+                    this->clear();
+                    this->createOrOpen();
+                    _mday = p->tm_mday;
+                }
+
+                if (!exists()) {
+                    createOrOpen();
+                }
+
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
+                std::time_t t = time(0);
+                tm* ptr_t = localtime(&t);
+
+                std::string timestr = std::to_string(ptr_t->tm_hour) + ":" + std::to_string(ptr_t->tm_min) + ":" + std::to_string(ptr_t->tm_sec) + "." + std::to_string((ms % 1000).count());
+
+                push_line("[" + timestr + "] " + message);
+            }
+        };
+        //CSV File
+        //JSON File
+        //XML File
+
 
         BinaryFile Directory::getChildFile(unsigned int i) {
             return BinaryFile(_child_files[i]);
